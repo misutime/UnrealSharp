@@ -91,7 +91,7 @@ C# 里覆写的是**引擎的 `Receive*` 蓝图事件**，不是同名的 C++ �
 | `PrintString(...)` | 来自手写扩展（`UnrealSharp.CoreUObject`） | 生成绑定里没有；`AActor` 可直接调 |
 | `OnX.Invoke(v)` | **`X.InnerDelegate.Invoke?.Invoke()`** | `Invoke` 在 `DelegateBase<T>` 上；官方示例的写法当前编不过 |
 | `TMulticastDelegate<Action>` | **必须自定义 `delegate` 类型** | 否则运行期 `TypeLoadException`（找不到 `{T.Name}__DelegateSignature` 包装） |
-| `TSoftObjectPtr<T>.Get()` | **`LoadSynchronous()`** | 比 AS 侧方便（AS 要手写 `LoadObject`） |
+| `TSoftObjectPtr<T>.Get()` | **`LoadSynchronous()`** | 与直觉命名不同，实测可用 |
 
 **命名空间要点**（漏了报 `CS0246`）：
 `TSoftObjectPtr<T>` / `TMulticastDelegate<T>` / `TSubclassOf<T>` 在 **`UnrealSharp` 根命名空间**，
@@ -120,7 +120,7 @@ public partial class AMyActor : AActor
     [UProperty(PropertyFlags.BlueprintAssignable)]
     public partial TMulticastDelegate<FMyEvent> OnSomething { get; set; }
 
-    public AMyActor() { Speed = 90.0; }        // 默认值在构造函数里给（没有 AS 那种 default 块）
+    public AMyActor() { Speed = 90.0; }        // 默认值在构造函数里给（没有独立的 default 块）
 
     public override void BeginPlay() { base.BeginPlay(); }
     public override void Tick(float dt) { base.Tick(dt); }
@@ -174,10 +174,12 @@ public delegate void FMyEvent();   // 给 TMulticastDelegate 用的委托类型
 
 ---
 
-## 八、C# 与 AngelScript 的取舍（本项目语境）
+## 八、C# / C++ / 蓝图 的分工（本项目语境）
 
-- 改 `.cs` 热重载 ~0.1–0.5 s；改 `.as` 热重载 <1 ms（都很适合迭代，别为此写 C++）。
-- 需要 **NuGet 生态 / .NET 类库 / 强类型重构** → C# 更合适。
-- 需要**接入已有 AngelScript 资产管线**（`Script/` 下现成逻辑）→ 继续用 AS。
-- **未验证**：两套脚本同时定义 `UCLASS`、往同一批资产上挂逻辑时是否互相干扰
-  （已确认的只是"能同时加载、互不阻塞"）。
+- **蓝图**：资产接线、关卡摆放、可视化创作（AnimGraph / 材质 / Niagara / Sequencer），
+  以及给 C# 类做子类 —— **蓝图是通往游戏资产的接口**。
+- **C#**：玩法和系统逻辑。改 `.cs` 热重载 ~0.1–0.5 s，迭代够快；
+  需要 **NuGet 生态 / .NET 类库 / 强类型重构 / 可测试性** 时更合适。
+- **C++**：定义反射类型、**把新 API 暴露给反射**（C# 只能访问反射暴露面，限制与蓝图相同）、
+  性能热点、改引擎本身；也可以用 C++ 扩展方法给已有的 C# 类加方法。
+- **判据**：能暴露的就暴露，别在 C# 里绕；**不要为了"迭代快"去写 C++** —— C# 热重载已经够快。
