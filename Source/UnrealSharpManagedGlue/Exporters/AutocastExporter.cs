@@ -145,14 +145,20 @@ public static class AutocastExporter
 			foreach (UhtFunction function in exported)
 			{
 				string methodName = names[function];
+
+				// The declared type is a record struct, and C# synthesizes ToString() for it.
+				// Emitting an explicit ToString() therefore collides with the synthesized member
+				// and fails the build with CS0111, whether it is marked override or new.
+				// The conversion stays reachable as the static Conv_*ToString function.
+				if (methodName == "ToString")
+				{
+					continue;
+				}
+
 				string returnType = function.ReturnProperty!.GetTranslator()!.GetManagedType(function.ReturnProperty!);
 				string functionCall = $"{function.Outer!.GetFullManagedName()}.{function.GetFunctionName()}";
 
-				bool isToString = methodName == "ToString";
-				string modifiers = isToString ? "override " : "";
-				string memberSuffix = isToString ? "()" : "";
-
-				stringBuilder.AppendLine($"public {modifiers}{returnType} {methodName}{memberSuffix} => {functionCall}(this);");
+				stringBuilder.AppendLine($"public {returnType} {methodName} => {functionCall}(this);");
 			}
 
 			stringBuilder.CloseBrace();
