@@ -165,10 +165,46 @@ public delegate void FMyEvent();   // 给 TMulticastDelegate 用的委托类型
    `FTransform` / `FKey` / `FGameplayTagContainer` 等）。
    **本 fork 已修**（跳过生成；上游 PR #728 的 `override`→`new` 治不了这个）。
    引擎字符串表示仍可显式调 `Conv_*ToString`。
-2. **编辑器挂起（两次实测）**：主线程停住、日志零增长、无崩溃转储；
-   两次都伴随**大量 idle 的 MSBuild 工作节点**（238 / 815 个，本机 28 逻辑核）。
-   **因果未证实**；疑似与反复触发 C# 编译（尤其**失败**的那些）有关。
-   缓解未验证：用 `MSBUILDDISABLENODEREUSE=1` 启动编辑器。
+2. **向导建 C# 工程后编辑器假死（2026-09-22 定位；引擎侧已修，插件侧补了保险）**：
+   主线程停住、日志零增长、无崩溃转储；历史上都伴随**大量 MSBuild 工作节点**（238 / 815 个，28 逻辑核）。
+
+   **判定手段（可复用，不用调试器）**：按 `ParentProcessId` 找出属于编辑器、且卡住不退出的子进程，
+   **只杀它**：编辑器 2 秒内恢复 ⇒ 主线程确实在等它（两组独立复现一致）。
+
+   **触发因素（已独立复现）**：`GetDotnetPath.bat` 把 `PATH` / `DOTNET_ROOT` 指向引擎**自带** SDK
+   （10.0.203），却没清掉**从调用方继承**的 MSBuild 重定向变量 —— 它们指向**系统** SDK（10.0.401）。
+   自带与系统 SDK 混用会让 `dotnet msbuild <sln> -t:Scan`（UAT/UBT 依赖检查）的**并行节点**路径失败，
+   并伴随 200~417 个 MSBuild 节点进程。**单变量结论**：`MSBUILD_EXE_PATH` 单独注入致败有**两套实验一致**的证据；
+   其余三个**结果依实验条件而异**（本项目复现台里 `MSBuildSDKsPath` 单注入出现过一次 exit=1、且未捕获到错误关键字；
+   另一套 `-m:2 -nr:false` 实验里三个都 exit=0）⇒ **按未定论记，别据此排除它们**。
+   另外"到底哪一步失败"没有日志级证据，"节点复用握手失败"只是**推断**。⚠️ 方向别搞反：这些变量**不一定只来自 VS** —— UAT 自己的 `DotnetProcess`
+   也会主动把其中三个设成所选系统 SDK（刻意的边界切换）；而 `MSBuild.bat`→`GetMSBuildPath`→VS
+   MSBuild.exe、以及 `InvokeDotNet`（直起系统 dotnet）**都不经过** `GetDotnetPath.bat`。
+   所以这条修复的作用域是"自带 dotnet 工具链"这一侧，不是"到处都清一遍"。
+
+   **致命机制（与上面分开看）**：`InvokeCommand` 在**游戏线程**上
+   `while (IsProcRunning) { ReadPipe; Sleep(10ms); }`，**没有超时也没有取消** ——
+   子进程不退出，界面就永久假死。
+   **"环境导致构建失败"与"同步等待没有上限"是两件事**，后者才是"假死"的直接原因。
+
+   **修法**：① 引擎：`GetDotnetPath.bat` 在走自带 SDK 的分支里清掉那 4 个变量（显式
+   `UE_USE_SYSTEM_DOTNET=1` 时保留，已实测）；② 插件：**不做总时长上限**，改为**输出静默告警**
+   （`StalledOutputWarningSeconds`，默认 60 秒，0=关闭）：连续该秒数没有任何新输出就打一条 Warning，
+   内容含 **pid + 生效阈值 + 已耗时**，启动日志也带 pid 与生效阈值。
+   刻意不做总时长上限的理由：人不会真的等几十分钟（发现不对劲就去查了），
+   而**自动杀进程会毁掉取证现场** —— 这次能查到 `WaitReason=Executive` 正是因为进程还活着。
+   **刻意不给插件追加 `-nocompile` / `-nocompileuat`**：实测修好环境后原重路径在编辑器里同样能过
+   （真实编辑器内 2.85 秒），而 `-nocompile` 会让 AutomationTool **拒绝编译任何脚本模块**，
+   本插件的 `Build/Scripts` 在首次安装 / 脚本更新时正需要它。
+
+   ⚠️ **改这个仓库的 `.bat` 时注释必须纯 ASCII**：`cmd.exe` 用 OEM 代码页（中文 Windows 是 GBK）
+   解码批处理，UTF-8 的多字节序列会**吞掉换行**，把下一行的 `rem` 吃掉、后半句当命令执行
+   （实测在 `GetDotnetPath.bat` 里写出过 `'CLI' 不是内部或外部命令` 之类垃圾行）。
+   `.ps1` 有 BOM 规则，`.bat` 则是「别写非 ASCII」。
+
+   **仍未定论**：并行扫描"具体哪一步握手失败"没有日志级证据；卡住那个 `cmd` 的**内核等待对象**
+   也没拿到（只有 `WaitReason=Executive` 这个泛等待）。这两点都不影响上面的干预结论，
+   但**不要写成已证实**。
 3. **`ProcessEvent` 相关**：不要用"按名字找最派生实现"来推理 `base.` 行为——
    引擎不是那么做的（见 §三）。
 

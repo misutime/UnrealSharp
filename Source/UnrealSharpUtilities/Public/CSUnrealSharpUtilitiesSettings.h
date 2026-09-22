@@ -21,4 +21,14 @@ public:
 	*/
 	UPROPERTY(EditDefaultsOnly, config, Category = "UnrealSharp | Build Output")
 	bool bShowBuildWarnings = false;
+
+	/**
+	* How long an external command (UAT / dotnet) may produce no output before a warning is logged, naming the
+	* child process id so it can be inspected externally. These commands are waited on synchronously (usually on
+	* the game thread), so an unnoticed stall is what actually hurts. This only logs and never kills: keeping the
+	* stalled process alive is what makes it diagnosable. A cold build may legitimately be silent for a while.
+	* Set to 0 to disable.
+	*/
+	UPROPERTY(EditDefaultsOnly, config, Category = "UnrealSharp | Build", meta = (ClampMin = "0"))
+	int32 StalledOutputWarningSeconds = 60;
 };

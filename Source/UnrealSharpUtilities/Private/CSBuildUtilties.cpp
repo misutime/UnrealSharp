@@ -18,6 +18,11 @@ bool UnrealSharp::Build::InvokeUnrealSharpAutomation(const FString& BuildAction,
 	FString Arguments;
 	BuildArguments(BuildAction, ActionArgs, Arguments);
 
+	// 刻意不追加 -nocompile / -nocompileuat：实测在修好「从调用方继承来的 MSBuild 重定向变量」之后，
+	// 走原始路径（含 UBT/UAT 依赖检查）在编辑器里同样能正常通过，不需要跳过它。
+	// 尤其 -nocompile 会让 AutomationTool 拒绝编译任何脚本模块，而本插件的 Automation 脚本模块
+	// 在首次安装或脚本更新后本来就需要重编。
+
 	int32 ReturnCode = 0;
 	FString Output;
 	return Process::InvokeCommand(FSerializedUATProcess::GetUATPath(), Arguments, ReturnCode, Output, nullptr, OnError);
