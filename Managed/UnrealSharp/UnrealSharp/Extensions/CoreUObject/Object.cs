@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using UnrealSharp.Core;
 using UnrealSharp.Core.Attributes;
 using UnrealSharp.Engine;
@@ -154,6 +154,12 @@ public partial class UObject
     /// <exception cref="ArgumentException"> Thrown if the outer object is not valid. </exception>
     public static T NewObject<T>(UObject? outer = null, TSubclassOf<T> classType = default, UObject? template = null) where T : UObject
     {
+        // Objects can only be created on the game thread outside garbage collection, and the engine
+        // treats violations as fatal. This is the first statement on purpose: the lines below already
+        // reach into the engine (native class lookup, transient package, managed object cache), so the
+        // check has to happen before any of them.
+        GameThreadDispatcher.EnsureEngineCallAllowed(nameof(NewObject));
+
         if (classType.NativeClass == IntPtr.Zero)
         {
             classType = new TSubclassOf<T>(typeof(T));
@@ -167,6 +173,12 @@ public partial class UObject
         }
 
         IntPtr handle = Bind_UObject.CallCreateNewObject(outer.NativeObject, classType.NativeClass, nativeTemplate);
+
+        if (handle == IntPtr.Zero)
+        {
+            throw new InvalidOperationException($"Failed to create an instance of '{typeof(T).Name}'.");
+        }
+
         return GCHandleUtilities.GetObjectFromHandlePtr<T>(handle)!;
     }
 

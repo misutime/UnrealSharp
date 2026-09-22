@@ -1,15 +1,36 @@
-﻿#include "CSBindsRegistry.h"
+#include "CSBindsRegistry.h"
 #include "CSManagedAssembly.h"
 #include "CSManager.h"
 #include "Logging/StructuredLog.h"
+#include "UObject/UObjectGlobals.h"
+#include "HAL/PlatformTLS.h"
+#include "Misc/AssertionMacros.h"
 
 DECLARE_UNREALSHARP_BINDER(Bind_UCoreUObject)
 {
 	UField* GetNativeField(const char* InAssemblyName, const char* InNamespace, const char* InTypeName, ECSFieldType InFieldType)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Bind_UCoreUObject::GetType);
+
+		// Resolving a type loads assemblies and compiles the managed types they declare, which is engine
+		// work that has to stay on the game thread. Managed callers validate this first and raise a
+		// managed error; refusing here is the last line of defence (a null result is reported as a
+		// failure by the managed wrapper instead of flowing on into the generated bindings).
+		if (!IsInGameThread() || IsGarbageCollecting())
+		{
+			UE_LOGFMT(LogUnrealSharp, Error, "Refusing to resolve type {0}.{1} of assembly '{2}': called from thread {3} (IsInGameThread={4}, IsGarbageCollecting={5}).",
+				InNamespace, InTypeName, InAssemblyName, FPlatformTLS::GetCurrentThreadId(), IsInGameThread(), IsGarbageCollecting());
+			FDebug::DumpStackTraceToLog(ELogVerbosity::Error);
+			return nullptr;
+		}
+
 		UCSManagedAssembly* Assembly = UCSManager::Get().FindOrLoadAssembly(InAssemblyName);
-		ensure(Assembly);
+
+		if (!Assembly)
+		{
+			UE_LOGFMT(LogUnrealSharp, Warning, "Failed to load assembly '{0}' while resolving type {1}.{2}", InAssemblyName, InNamespace, InTypeName);
+			return nullptr;
+		}
 
 		FCSFieldName FieldName(InTypeName, FCSNamespace(InNamespace), InAssemblyName, InFieldType);
 		TSharedPtr<FCSManagedTypeDefinition> ManagedTypeDefinition = Assembly->FindOrAddManagedTypeDefinition(FieldName);

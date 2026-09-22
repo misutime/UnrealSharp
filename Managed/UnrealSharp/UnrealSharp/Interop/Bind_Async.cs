@@ -1,4 +1,4 @@
-﻿using UnrealSharp.Binds;
+using UnrealSharp.Binds;
 
 namespace UnrealSharp.Interop;
 
@@ -6,5 +6,6 @@ namespace UnrealSharp.Interop;
 public static unsafe partial class Bind_Async
 {
     public static delegate* unmanaged<WeakObjectData, int, IntPtr, void> RunOnThread;
+    public static delegate* unmanaged<IntPtr, void> RunOnGameThread;
     public static delegate* unmanaged<int> GetCurrentNamedThread;
 }

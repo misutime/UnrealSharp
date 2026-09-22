@@ -1,4 +1,4 @@
-﻿#include "CSManager.h"
+#include "CSManager.h"
 #include "CSManagedGCHandle.h"
 #include "CSManagedAssembly.h"
 #include "UnrealSharpCore.h"
@@ -12,6 +12,7 @@
 
 #include "Misc/CoreDelegates.h"
 #include "UObject/Package.h"
+#include "Async/Async.h"
 
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wdangling-assignment"
@@ -161,9 +162,29 @@ void UCSManager::InitialAssemblyLoad()
 
 UCSManagedAssembly* UCSManager::LoadAssemblyByPath(const FString& AssemblyPath, bool bIsCollectible)
 {
+	const FString AssemblyName = FPaths::GetBaseFilename(AssemblyPath);
+
+	// Loading an assembly is engine work: it can create the UCSManagedAssembly object, compile the
+	// managed types it declares into UObjects and add packages. All of that is only legal on the game
+	// thread, and creating objects is additionally fatal while a garbage collection holds the object
+	// hash tables. Callers can resume on a thread pool thread, so the request is refused here and
+	// reported back: the managed side validates the same conditions first and turns a refusal into a
+	// catchable error. This check sits above every branch (including the one that loads an assembly
+	// that already exists but is not loaded yet) so no engine state is touched off the game thread.
+	if (!IsInGameThread() || IsGarbageCollecting())
+	{
+		// Refuse instead of touching engine state here. Managed callers validate the same conditions
+		// before they call in and turn the refusal into a descriptive managed exception; queueing the
+		// work and returning a null assembly is deliberately NOT done, because a null result keeps
+		// flowing through the generated bindings until one of their own checks fires.
+		UE_LOGFMT(LogUnrealSharp, Error, "Refusing to load assembly '{0}': called from thread {1} (IsInGameThread={2}, IsGarbageCollecting={3}).",
+			AssemblyName, FPlatformTLS::GetCurrentThreadId(), IsInGameThread(), IsGarbageCollecting());
+		FDebug::DumpStackTraceToLog(ELogVerbosity::Error);
+		return nullptr;
+	}
+
 	UCSManagedAssembly* Assembly;
 	
-	const FString AssemblyName = FPaths::GetBaseFilename(AssemblyPath);
 	if (UCSManagedAssembly* ExistingAssembly = FindAssembly(*AssemblyName))
 	{
 		if (ExistingAssembly->IsAssemblyLoaded())
@@ -177,6 +198,13 @@ UCSManagedAssembly* UCSManager::LoadAssemblyByPath(const FString& AssemblyPath, 
 	else
 	{
 		Assembly = NewObject<UCSManagedAssembly>(this, *AssemblyName);
+
+		if (!Assembly)
+		{
+			UE_LOGFMT(LogUnrealSharp, Error, "Failed to create managed assembly '{0}'.", AssemblyName);
+			return nullptr;
+		}
+
 		Assembly->Initialize(AssemblyPath, bIsCollectible);
 		
 		Assemblies.Add(Assembly->GetFName(), Assembly);

@@ -23,13 +23,27 @@ FCSFieldName FCSFieldName::FromNativeBase(const UField* NativeField)
 UCSManagedAssembly* FCSFieldName::ResolveAssembly() const
 {
 	UCSManagedAssembly* Assembly = UCSManager::Get().FindOrLoadAssembly(AssemblyName);
-	check(::IsValid(Assembly));
+
+	if (!::IsValid(Assembly))
+	{
+		// Returning a valid-looking but unusable assembly is worse than failing: the caller has to see
+		// the failure and handle it as an error instead of continuing into reflection calls.
+		ensureMsgf(false, TEXT("Failed to resolve assembly '%s'."), *AssemblyName.ToString());
+		return nullptr;
+	}
+
 	return Assembly;
 }
 
 UField* FCSFieldName::ResolveField() const
 {
 	UCSManagedAssembly* Assembly = ResolveAssembly();
+
+	if (!Assembly)
+	{
+		return nullptr;
+	}
+
 	return Assembly->ResolveUField(*this);
 }
 

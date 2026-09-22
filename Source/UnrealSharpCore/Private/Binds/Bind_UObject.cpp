@@ -1,6 +1,8 @@
-﻿#include "CSBindsRegistry.h"
+#include "CSBindsRegistry.h"
 #include "CSManager.h"
 #include "UObject/UObjectGlobals.h"
+#include "HAL/PlatformTLS.h"
+#include "Misc/AssertionMacros.h"
 
 DECLARE_UNREALSHARP_BINDER(Bind_UObject)
 {
@@ -8,6 +10,17 @@ DECLARE_UNREALSHARP_BINDER(Bind_UObject)
 	{
 		if (!IsValid(Outer) || !IsValid(Class))
 		{
+			return nullptr;
+		}
+
+		// Creating an object is only legal on the game thread, and the engine treats object creation as
+		// fatal while a garbage collection holds the object hash tables. Managed callers validate this
+		// first and raise a managed error; this refusal is the last line of defence.
+		if (!IsInGameThread() || IsGarbageCollecting())
+		{
+			UE_LOGFMT(LogUnrealSharp, Error, "Refusing to create '{0}': called from thread {1} (IsInGameThread={2}, IsGarbageCollecting={3}).",
+				*GetNameSafe(Class), FPlatformTLS::GetCurrentThreadId(), IsInGameThread(), IsGarbageCollecting());
+			FDebug::DumpStackTraceToLog(ELogVerbosity::Error);
 			return nullptr;
 		}
 		

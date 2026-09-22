@@ -55,15 +55,19 @@ public static class SolutionManager
         {
             string fullSolutionPath = Path.GetFullPath(solutionPath);
             await UnrealSharpWorkspace.OpenSolutionAsync(fullSolutionPath);
-            
+
             IList<Project> projects = UnrealSharpWorkspace.CurrentSolution.Projects.ToList();
         
             foreach (Project project in projects)
             {
                 await ProcessProject(project);
             }
-            
-            BuildProjectDependencyMap(projects);
+
+            // Resolving managed types loads assemblies, and loading an assembly creates an Unreal
+            // object. This continuation runs on a thread pool thread, where that is illegal (the
+            // engine aborts when a garbage collection holds the object hash tables), so the work is
+            // handed back to the game thread instead of being called from here.
+            await GameThreadDispatcher.RunAsync(() => BuildProjectDependencyMap(projects));
 
             unsafe
             {

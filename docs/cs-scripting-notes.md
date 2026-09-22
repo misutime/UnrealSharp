@@ -207,6 +207,102 @@ public delegate void FMyEvent();   // 给 TMulticastDelegate 用的委托类型
    但**不要写成已证实**。
 3. **`ProcessEvent` 相关**：不要用"按名字找最派生实现"来推理 `base.` 行为——
    引擎不是那么做的（见 §三）。
+4. **GC 期间创建 `UCSManagedAssembly` 导致编辑器致命崩溃（2026-09-22 定位并修复）**
+
+   **症状**：编辑器弹
+   `Assertion failed: !IsGarbageCollectingAndLockingUObjectHashTables() ... Creating UObjects while Collecting Garbage is not allowed!`，
+   随后以 `EXCEPTION_ACCESS_VIOLATION 0x0` 退出。实测出现时机是**给关卡放置 Actor 之后**（放置会触发一次 GC）。
+
+   **根因（两层，都有实测证据）**
+   - *直接原因*：`UCSManager::LoadAssemblyByPath` 在**非游戏线程**上做引擎工作（加载程序集、
+     编译它声明的托管类型、创建 `UCSManagedAssembly`、加包），而引擎那句
+     `checkf(!IsGarbageCollectingAndLockingUObjectHashTables(), ...)`（`UObjectGlobals.cpp:3484`，
+     此时对象哈希表已上锁）是**裸 `checkf`、不返回**，直接走致命处理 ⇒ 编辑器退出。
+   - ⚠️ **更正（独立复核指出，2026-09-22）**：不要写成"`checkf` 失败 → `NewObject` 返回空 →
+     插件解引用空指针 → `ACCESS_VIOLATION`"。`checkf` 没有 `return nullptr` 这条路，
+     转储里那个 `EXCEPTION_ACCESS_VIOLATION 0x0` 更可能是**致命处理自身**在非游戏线程上的表现，
+     **不是已证实的空指针解引用**。`NewObject` 结果判空仍然保留，但理由换成**有代码依据**的那条：
+     编辑器下 `StaticAllocateObjectErrorTests` 会 `return NULL`（`UObjectGlobals.cpp:3469-3472`）。
+   - *结构性原因*：`SolutionManager.LoadSolutionAsync` 是 `async void` + `await`，这条路径**没有**
+     游戏线程同步上下文 ⇒ 第一个 `await` 之后的续体跑在**线程池线程**上，却在那个线程调反射接口
+     （`Bind_UCoreUObject::GetNativeField` → `UCSManager::FindOrLoadAssembly` → 加载程序集 → 建对象）。
+     插件自己的代码就是旁证：`OnHotReloadReady_Callback` 第一件事是 `AsyncTask(ENamedThreads::GameThread, ...)`
+     —— 作者知道这个回调不在游戏线程上。
+
+   **判定手段（可复用：先量"违规调用"，再谈"崩不崩"）**
+   在 `LoadAssemblyByPath` 里**唯一**的 `NewObject<UCSManagedAssembly>` 之前打印
+   `FPlatformTLS::GetCurrentThreadId()` / `IsInGameThread()` / `IsGarbageCollecting()`，
+   并 `FDebug::DumpStackTraceToLog()`。实测**每次开会话都命中**：
+
+   ```
+   creating UCSManagedAssembly 'UnrealSharp' on thread 70396 (IsInGameThread=false, IsGarbageCollecting=false)
+   [Callstack] UCSManager::LoadAssemblyByPath()      CSManager.cpp
+   [Callstack] UCSManager::LoadUserAssemblyByName()  CSManager.cpp
+   [Callstack] UCSManager::FindOrLoadAssembly()      CSManager.h
+   [Callstack] Bind_UCoreUObject::GetNativeField()   Bind_UCoreUObject.cpp
+   ```
+   ⇒ **违规调用必现、崩溃只是竞态**（GC 那一刻是否正好锁着对象哈希表）。
+   判据必须建在"违规调用"这一层；建在"这次崩没崩"上会误判成"偶发、难复现"。
+
+   **修法（三层，本次均已实现并验证）**
+   - *结构性（根因）*：`Bind_Async` 新增 `RunOnGameThread(FGCHandleIntPtr)`（**不需要 world context**，
+     编辑器启动期也能用）；"是否已在游戏线程"由**原生**判断 —— 托管侧的 `GetCurrentNamedThread()`
+     **不能**用于这个判断（实测会让派发退化成"本线程直调"）。原生实现只在
+     `IsInGameThread() && !IsGarbageCollecting()` 时 inline，否则 `AsyncTask(GameThread, …)`
+     —— **在游戏线程但正在 GC 也要排队**（游戏线程身份 ≠ GC 安全点）。C# 侧
+     `UnrealSharp.GameThreadDispatcher.RunAsync(Action)`；`BuildProjectDependencyMap` 改走它
+     ⇒ 反射与程序集加载只在游戏线程发生。
+   - *托管调用边界（失败必须可捕获，而不是崩编辑器）*：新增 `UnrealSharp.Core.EngineCallGuard`
+     （查询走原生 `Bind_UCSManager.IsOnGameThread / IsCollectingGarbage`）。应用点：
+     ① `NativeReflectionHelper.GetNativeField` 调用前校验，**并且原生返回 0 时抛异常** ——
+     生成绑定的静态构造拿不到指针时**必须失败**，不能继续拿空指针去调原生（那会在
+     `Bind_UFunction.cpp:8` 的 `check(NativeFunction)` 上**二次致命**）；
+     ② `UObject.NewObject<T>()` 先校验，创建失败抛异常（不再返回 null）；
+     ③ `FCSFieldName::ResolveAssembly` 失败返回空指针（不再返回"非空但无效"的对象），
+     `ResolveField` / `Bind_UCoreUObject::GetNativeField` 全链判空。
+   - *原生最后一道守卫（拒绝，不排队）*：`LoadAssemblyByPath` **函数顶端**、
+     `Bind_UCoreUObject::GetNativeField`、`Bind_UObject::CreateNewObject` 在
+     `!IsInGameThread() || IsGarbageCollecting()` 时记 Error（线程 + GC 状态 + 调用栈）并返回 nullptr。
+     ⚠️ **刻意不做"排队重试 + 返回空"**（初版做过，实测是错的）：它会继续流过生成绑定、触发二次致命断言，
+     而 `.NET` 已失败的静态构造救不回来（`TypeInitializationException` 之后该类型在同一进程内永久不可用）。
+     同步接口要么给出真实结果、要么让调用方拿到**可捕获的错误**。
+   - **规则**：任何 `await` 之后还要碰引擎对象 / 反射的 C# 代码，必须过 `GameThreadDispatcher`；
+     插件自带的 `ConfigureWithUnrealContext` **不能**用于编辑器启动路径（要求有效 world context，
+     启动期没有 ⇒ `Post` 被静默丢弃、流程卡住）。
+
+   **怎么验证的（三组，全部实测）**
+   - *A/B 探针*：修前 `IsInGameThread=false`（线程 70396 / 87652，普通会话稳定复现）；
+     修后同一处 `IsInGameThread=true`，且原生拒绝 0 条、GC 断言 0 条，
+     程序集照常加载 + `C# Hot Reload is ready`（不是靠"跳过加载"过关）。
+   - *强制 GC*：`gc.CollectGarbageEveryFrame=1`（日志 `Set CVar` 确认生效）复跑同样全绿；
+     另加一次"强制 GC + 改 `.cs` 触发热重载"复跑：0 断言、0 拒绝、`C# Hot Reload completed`。
+   - *故障注入（回应"返回空会级联"这条实证）*：把派发**故意绕开**（退回池线程直调）+ 强制 GC，
+     得到的是**一条可捕获的托管异常**：
+     ```
+     Failed to load solution ...: TypeInitializationException ...
+       ---> System.InvalidOperationException: GetNativeField must run on the game thread while no
+            garbage collection is running (onGameThread=False, collectingGarbage=False, managedThread=17).
+     ```
+     同时 `Assertion failed: NativeFunction` **0 条**、原生拒绝 0 条、GC 断言 0 条、**编辑器存活** ✓
+     —— 证明"违规 ⇒ 可捕获失败"成立，不再有二次致命。
+
+   **仍未定论 / 未做（需另授权，属更大范围）**
+   - 托管侧 `GetCurrentNamedThread()`（`GetCurrentThreadIfKnown()`）在线程池线程上究竟返回什么、
+     以至于"是否在游戏线程"判断失误 —— 没有单独抓这个返回值（现已改用原生判断，不再依赖它）。
+   - 把该校验在**绑定生成器**里统一应用（并允许纯线程安全函数例外），而不是逐个入口加。
+   - 调度器生命周期协议：关机后拒收新任务、待执行任务的所有权/取消/释放、保证等待方一定拿到结果或取消。
+     **不能"超时后直接 Free 句柄"** —— 迟到的原生回调会悬空/双释放。当前没有这些机制：若游戏线程永不执行
+     回调，强句柄与等待的 `Task` 都不会终结（模态阻塞恢复后只是延迟，不等于永久泄漏；关机期未实测）。
+   - `RunOnGameThread` 用 `Invoke(nullptr)` 派发，**不设置 world context**：被派发的 Action 不能假设
+     有有效 world。
+   - 覆盖边界：本次给**已识别到的**建对象入口都加了守卫（`LoadAssemblyByPath` 全分支、`GetNativeField`、
+     `CreateNewObject`）与托管前置校验；`Bind_FTypeBuilder::RegisterManagedType_Native` →
+     `RegisterManagedType`、`ResolveUField` 类型编译等入口目前依赖"调用方在游戏线程"这条规则
+     （非游戏线程一律不许碰 `UCSManager` 的查询/加载接口），尚未逐个加原生守卫。
+
+   ⚠️ **改插件托管代码后必须显式重编插件解决方案**（`RunUAT.bat BuildSolution -Folders=<插件>\Managed\UnrealSharp`）：
+   `BuildUserSolution` 只 publish **用户** `Script/` 方案，编辑器启动期的自动构建也不保证覆盖插件自身程序集
+   —— 实测漏编时改动不会生效（探针不出现）。
 
 ---
 
