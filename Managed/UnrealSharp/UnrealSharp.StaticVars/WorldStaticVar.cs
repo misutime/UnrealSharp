@@ -33,6 +33,15 @@ public sealed class FWorldStaticVar<T> : FBaseStaticVar<T>
     
     ~FWorldStaticVar()
     {
+        // The finalizer runs off the game thread, where engine access is refused. Unbinding is not something that
+        // may be dropped silently: a native record pointing at a managed callback would outlive the delegate. The
+        // ALC unloading path below runs on the game thread and unbinds there; this is the safety net, and it
+        // reports when even the safety net cannot run.
+        if (!EngineCallGuard.TryBeginEngineCall($"{nameof(FWorldStaticVar<T>)}.~FWorldStaticVar"))
+        {
+            return;
+        }
+
         Bind_FWorldDelegates.CallUnbindOnWorldCleanup(_onWorldCleanupHandle);
     }
     

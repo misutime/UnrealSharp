@@ -21,11 +21,15 @@ public class FText : IEquatable<FText>, IDisposable
     
     public FText()
     {
+        // Creating engine text is engine state, so it is refused before anything is allocated.
+        EngineCallGuard.EnsureEngineCallAllowed(nameof(FText));
         Bind_FText.CallCreateEmptyText(ref Data);
     }
     
     public FText(string? text)
     {
+        EngineCallGuard.EnsureEngineCallAllowed(nameof(FText));
+
         if (string.IsNullOrEmpty(text))
         {
             Bind_FText.CallCreateEmptyText(ref Data);
@@ -43,6 +47,8 @@ public class FText : IEquatable<FText>, IDisposable
 
     public FText(ReadOnlySpan<char> text)
     {
+        EngineCallGuard.EnsureEngineCallAllowed(nameof(FText));
+
         if (text.IsEmpty)
         {
             Bind_FText.CallCreateEmptyText(ref Data);
@@ -64,6 +70,10 @@ public class FText : IEquatable<FText>, IDisposable
     
     internal FText(FTextData nativeInstance)
     {
+        // Refused before the reference is acquired: an AddRef that never happened would be followed by a Release
+        // that does happen, which would drop the count of shared text data that is still in use.
+        EngineCallGuard.EnsureEngineCallAllowed(nameof(FText));
+
         Data = nativeInstance;
         Data.ObjectPointer.AddRef();
     }
@@ -81,11 +91,28 @@ public class FText : IEquatable<FText>, IDisposable
 
     protected virtual void Dispose(bool disposing)
     {
-        if (IsValid)
+        if (!IsValid)
         {
-            Data.ObjectPointer.Release();
-            Data = default;
+            return;
         }
+
+        // Refused before the reference is released. Clearing the field without releasing would leave the native
+        // reference without an owner, and releasing without clearing would leave a field pointing at freed data,
+        // so neither happens: the explicit call reports the failure, the finalizer records it and leaves the
+        // object untouched (it will be collected again, and the reference stays accounted for).
+        if (!EngineCallGuard.TryBeginEngineCall($"{nameof(FText)}.{nameof(Dispose)}"))
+        {
+            if (disposing)
+            {
+                throw new EngineCallRefusedException(
+                    "FText.Dispose must run on the game thread while no garbage collection is running.");
+            }
+
+            return;
+        }
+
+        Data.ObjectPointer.Release();
+        Data = default;
     }
     
     /// <summary>
@@ -197,6 +224,11 @@ public static class TextMarshaller
 { 
     public static void ToNative(IntPtr nativeBuffer, int arrayIndex, FText obj)
     {
+        // Transactional: refused before the destination's reference is released. A refusal in the middle of the
+        // three steps below (release, overwrite, AddRef) would leave either a released destination that still
+        // looks occupied, or an acquired reference that nothing points at.
+        EngineCallGuard.EnsureEngineCallAllowed(nameof(ToNative));
+
         unsafe
         {
             FTextData* to = (FTextData*)(nativeBuffer + arrayIndex * sizeof(FTextData));

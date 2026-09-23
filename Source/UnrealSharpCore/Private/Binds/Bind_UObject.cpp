@@ -1,5 +1,6 @@
 #include "CSBindsRegistry.h"
 #include "CSManager.h"
+#include "CSThreadDiagnostics.h"
 #include "UObject/UObjectGlobals.h"
 #include "HAL/PlatformTLS.h"
 #include "Misc/AssertionMacros.h"
@@ -16,11 +17,8 @@ DECLARE_UNREALSHARP_BINDER(Bind_UObject)
 		// Creating an object is only legal on the game thread, and the engine treats object creation as
 		// fatal while a garbage collection holds the object hash tables. Managed callers validate this
 		// first and raise a managed error; this refusal is the last line of defence.
-		if (!IsInGameThread() || IsGarbageCollecting())
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UObject::CreateNewObject")))
 		{
-			UE_LOGFMT(LogUnrealSharp, Error, "Refusing to create '{0}': called from thread {1} (IsInGameThread={2}, IsGarbageCollecting={3}).",
-				*GetNameSafe(Class), FPlatformTLS::GetCurrentThreadId(), IsInGameThread(), IsGarbageCollecting());
-			FDebug::DumpStackTraceToLog(ELogVerbosity::Error);
 			return nullptr;
 		}
 		
@@ -111,6 +109,19 @@ DECLARE_UNREALSHARP_BINDER(Bind_UObject)
 	void InvokeNativeStaticFunction(UClass* NativeClass, UFunction* NativeFunction, uint8* Params, uint8* ReturnValueAddress)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(InvokeNativeStaticFunction);
+
+		// Refused before GetDefaultObject(), which can construct the class default object and does not go
+		// through the object lookup entry point.
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UObject::InvokeNativeStaticFunction")))
+		{
+			return;
+		}
+
+		if (!IsValid(NativeClass) || NativeFunction == nullptr)
+		{
+			return;
+		}
+
 		UObject* ClassDefaultObject = NativeClass->GetDefaultObject();
 		EvaluateInvokePath(ClassDefaultObject, NativeFunction, Params, ReturnValueAddress);
 	}
@@ -178,8 +189,15 @@ DECLARE_UNREALSHARP_BINDER(Bind_UObject)
 		return UCSManager::Get().FindManagedObject(Outer);
 	}
 
+	// Loading has a legal null result ("nothing found"), so the refusal check has to come first: otherwise a
+	// refused call and a genuine miss would be indistinguishable to the caller.
 	void* StaticLoadClass(UClass* BaseClass, UObject* InOuter, const char* Name)
 	{
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UObject::StaticLoadClass")))
+		{
+			return nullptr;
+		}
+
 		if (Name == nullptr)
 		{
 			return nullptr;
@@ -195,6 +213,11 @@ DECLARE_UNREALSHARP_BINDER(Bind_UObject)
 
 	void* StaticLoadObject(UClass* BaseClass, UObject* InOuter, const char* Name)
 	{
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UObject::StaticLoadObject")))
+		{
+			return nullptr;
+		}
+
 		if (Name == nullptr)
 		{
 			return nullptr;

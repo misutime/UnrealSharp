@@ -36,6 +36,11 @@ internal static class Main
             PluginsCallbacks.Initialize(pluginCallbacks);
             ManagedCallbacks.Initialize(managedCallbacks);
             NativeBinds.Initialize(bindsCallbacks);
+
+            // Diagnostics only, off unless the startup switch asks for it; it verifies that the managed guard
+            // refuses off the game thread and that a refusal is counted exactly once.
+            ThreadGuardSelfTest.RunIfEnabled();
+
             result->Success = NativeBool.True;
         }
         catch (Exception exception)

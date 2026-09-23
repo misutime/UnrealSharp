@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
@@ -189,22 +189,57 @@ public class NativeCallbacksWrapperGenerator : IIncrementalGenerator
 
             string delegateName = delegateInfo.Name;
 
-            if (delegateInfo.ReturnValue.Type.ToString() != "void")
+            // Entry points marked as game thread work are refused by the wrapper itself. This is the single
+            // choke point that also covers generated static constructors and generated invokers, which have no
+            // hand written call site to guard.
+            if (delegateInfo.RequiresGameThread)
             {
-                sourceBuilder.Append($"            return {delegateName}(");
+                sourceBuilder.AppendLine($"            global::UnrealSharp.Core.EngineCallGuard.EnsureEngineCallAllowed(\"{delegateName}\");");
             }
-            else
+            else if (!delegateInfo.TierAGuarded && !IsTierBExempt(classInfo.Name, delegateName))
             {
-                sourceBuilder.Append($"            {delegateName}(");
+                // Development-only diagnostic (Tier B). It is skipped for entry points whose native side already
+                // refuses (Tier A) - the diagnostic would fire first and turn a refusal into a different failure -
+                // and for the symbols the diagnostics themselves depend on.
+                sourceBuilder.AppendLine($"            global::UnrealSharp.Core.TierBChecks.Check(\"{classInfo.Name}\", \"{delegateName}\");");
             }
 
-            sourceBuilder.Append(string.Join(", ", delegateInfo.Parameters.Select(p =>
+            bool hasReturnValue = delegateInfo.ReturnValue.Type.ToString() != "void";
+            string returnTypeName = delegateInfo.ReturnValue.Type.ToString();
+            bool validateNullResult = hasReturnValue && delegateInfo.NoNullResult && IsPointerTypeName(returnTypeName);
+            bool validateNegativeResult = hasReturnValue && delegateInfo.NonNegativeResult && IsIntegerTypeName(returnTypeName);
+            bool captureResult = validateNullResult || validateNegativeResult;
+
+            string invocation = $"{delegateName}(" + string.Join(", ", delegateInfo.Parameters.Select(p =>
             {
                 string prefix = p.IsOutParameter ? "out " : p.IsRefParameter ? "ref " : string.Empty;
                 return prefix + p.Name;
-            })));
+            })) + ")";
 
-            sourceBuilder.AppendLine(");");
+            if (captureResult)
+            {
+                sourceBuilder.AppendLine($"            {returnTypeName} result = {invocation};");
+
+                if (validateNullResult)
+                {
+                    sourceBuilder.AppendLine($"            global::UnrealSharp.Core.EngineCallGuard.EnsureNotNullResult(result, \"{delegateName}\");");
+                }
+                else
+                {
+                    sourceBuilder.AppendLine($"            global::UnrealSharp.Core.EngineCallGuard.EnsureNotNegativeResult(result, \"{delegateName}\");");
+                }
+
+                sourceBuilder.AppendLine("            return result;");
+            }
+            else if (hasReturnValue)
+            {
+                sourceBuilder.AppendLine($"            return {invocation};");
+            }
+            else
+            {
+                sourceBuilder.AppendLine($"            {invocation};");
+            }
+
             sourceBuilder.AppendLine("        }");
         }
 
@@ -213,6 +248,88 @@ public class NativeCallbacksWrapperGenerator : IIncrementalGenerator
         sourceBuilder.AppendLine("}");
 
         context.AddSource($"{classInfo.Name}.generated.cs", SourceText.From(sourceBuilder.ToString(), Encoding.UTF8));
+    }
+
+    private static void ReadGameThreadEntryAttribute(GeneratorSyntaxContext context, FieldDeclarationSyntax fieldDeclaration, ref DelegateInfo delegateInfo)
+    {
+        if (context.SemanticModel.GetDeclaredSymbol(fieldDeclaration.Declaration.Variables.First()) is not IFieldSymbol fieldSymbol)
+        {
+            return;
+        }
+
+        foreach (AttributeData attribute in fieldSymbol.GetAttributes())
+        {
+            string? attributeName = attribute.AttributeClass?.Name;
+
+            if (attributeName == "TierAGuardedAttribute")
+            {
+                delegateInfo.TierAGuarded = true;
+                continue;
+            }
+
+            if (attributeName != "GameThreadEntryAttribute")
+            {
+                continue;
+            }
+
+            delegateInfo.RequiresGameThread = true;
+
+            foreach (KeyValuePair<string, TypedConstant> namedArgument in attribute.NamedArguments)
+            {
+                if (namedArgument.Value.Value is not bool value)
+                {
+                    continue;
+                }
+
+                if (namedArgument.Key == "NoNullResult")
+                {
+                    delegateInfo.NoNullResult = value;
+                }
+                else if (namedArgument.Key == "NonNegativeResult")
+                {
+                    delegateInfo.NonNegativeResult = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Entry points the development-only diagnostic must not wrap, because the diagnostic itself goes through
+    /// them: the state query, the refusal counters, the logging and dispatch paths, and the pure thread queries
+    /// that are meaningful on any thread. Every entry here is a deliberate per symbol decision; the always-on
+    /// boundary does not depend on this list.
+    /// </summary>
+    private static bool IsTierBExempt(string className, string functionName)
+    {
+        return (className, functionName) switch
+        {
+            ("Bind_UCSManager", "GetEngineCallState") => true,
+            ("Bind_UCSManager", "GetThreadRefusalCount") => true,
+            ("Bind_UCSManager", "GetThreadBoundaryCatchCount") => true,
+            ("Bind_UCSManager", "ReportBoundaryCatch") => true,
+            ("Bind_UCSManager", "RecordManagedRefusal") => true,
+            ("Bind_UCSManager", "ShouldRunManagedThreadSelfTest") => true,
+            ("Bind_UCSManager", "ShouldRunFinalizerThreadSelfTest") => true,
+            ("Bind_UCSManager", "IsTierBEnabled") => true,
+            ("Bind_UCSManager", "IsOnGameThread") => true,
+            ("Bind_UCSManager", "IsCollectingGarbage") => true,
+            ("Bind_FMsg", "Log") => true,
+            ("Bind_Async", "RunOnThread") => true,
+            ("Bind_Async", "RunOnGameThread") => true,
+            ("Bind_Async", "TryRunOnGameThread") => true,
+            ("Bind_Async", "GetCurrentNamedThread") => true,
+            _ => false
+        };
+    }
+
+    private static bool IsPointerTypeName(string typeName)
+    {
+        return typeName is "IntPtr" or "nint" or "System.IntPtr" or "System.nint";
+    }
+
+    private static bool IsIntegerTypeName(string typeName)
+    {
+        return typeName is "int" or "System.Int32";
     }
 
     private static ClassInfo? GetClassInfoOrNull(GeneratorSyntaxContext context)
@@ -262,6 +379,8 @@ public class NativeCallbacksWrapperGenerator : IIncrementalGenerator
                 Parameters = new List<DelegateParameterInfo>()
             };
 
+            ReadGameThreadEntryAttribute(context, fieldDeclaration, ref delegateInfo);
+
             char paramName = 'a';
 
             for (int i = 0; i < functionPointerTypeSyntax.ParameterList.Parameters.Count; i++)
@@ -309,6 +428,18 @@ internal struct DelegateInfo
 {
     public string Name;
     public List<DelegateParameterInfo> Parameters;
+
+    /// <summary>Set when the field carries the game thread entry attribute and the wrapper must refuse off-thread calls.</summary>
+    public bool RequiresGameThread;
+
+    /// <summary>Set when the native side of the entry point already refuses illegal engine access (Tier A).</summary>
+    public bool TierAGuarded;
+
+    /// <summary>Set when a null pointer result must be reported as a refusal instead of handed to the caller.</summary>
+    public bool NoNullResult;
+
+    /// <summary>Set when a negative integer result must be reported as a refusal instead of handed to the caller.</summary>
+    public bool NonNegativeResult;
     public List<DelegateParameterInfo> ParametersAndReturnValue
     {
         get

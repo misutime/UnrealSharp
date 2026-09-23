@@ -37,6 +37,14 @@ public sealed class FGameStaticVar<T> : FBaseStaticVar<T>
     
     ~FGameStaticVar()
     {
+        // Same as the world scope: the finalizer is off the game thread, and dropping the unbind would leave a
+        // native record pointing at a managed callback. The ALC unloading path unbinds on the game thread; this
+        // reports when it cannot even attempt to.
+        if (!EngineCallGuard.TryBeginEngineCall($"{nameof(FGameStaticVar<T>)}.~FGameStaticVar"))
+        {
+            return;
+        }
+
         Cleanup();
     }
 

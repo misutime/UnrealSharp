@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using UnrealSharp.Attributes;
@@ -49,13 +49,36 @@ internal sealed class FInstancedStructManager : IDisposable
 
     ~FInstancedStructManager()
     {
-        Dispose();   
+        Dispose(false);   
     }
     
     public void Dispose()
     {
+        Dispose(true);
+    }
+
+    private void Dispose(bool disposing)
+    {
+        // Destroying the payload can run an arbitrary struct destructor, so a refusal leaves the payload in
+        // place: the explicit call reports the failure, the finalizer records it instead of letting an exception
+        // escape the finalizer thread.
+        if (!EngineCallGuard.TryBeginEngineCall($"{nameof(FInstancedStructManager)}.{nameof(Dispose)}"))
+        {
+            if (disposing)
+            {
+                throw new EngineCallRefusedException(
+                    "FInstancedStructManager.Dispose must run on the game thread while no garbage collection is running.");
+            }
+
+            return;
+        }
+
         Bind_FInstancedStruct.CallNativeDestroy(ref _structData);
-        GC.SuppressFinalize(this);   
+
+        if (disposing)
+        {
+            GC.SuppressFinalize(this);
+        }
     }
 }
 

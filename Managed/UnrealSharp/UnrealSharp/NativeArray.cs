@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using UnrealSharp.Core;
@@ -24,12 +24,27 @@ public unsafe class TNativeArray<T> : IEnumerable<T> where T : INumber<T>
     /// <summary>
     /// The number of elements in the array.
     /// </summary>
-    public int Length => NativeBuffer->ArrayNum;
+    public int Length
+    {
+        get
+        {
+            // First protected access of a container view: the engine array header is read directly.
+            TierBChecks.CheckAccess(nameof(TNativeArray<T>), nameof(Length));
+            return NativeBuffer->ArrayNum;
+        }
+    }
 
     /// <summary>
     /// The native buffer that holds the array data.
     /// </summary>
-    protected IntPtr NativeArrayBuffer => NativeBuffer->Data;
+    protected IntPtr NativeArrayBuffer
+    {
+        get
+        {
+            TierBChecks.CheckAccess(nameof(TNativeArray<T>), nameof(NativeArrayBuffer));
+            return NativeBuffer->Data;
+        }
+    }
 
     /// <inheritdoc />
     public T this[int index]

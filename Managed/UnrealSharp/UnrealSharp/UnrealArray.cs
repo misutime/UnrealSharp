@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using UnrealSharp.Core;
 using UnrealSharp.Core.Marshallers;
 using UnrealSharp.Interop;
@@ -48,12 +48,27 @@ public abstract unsafe class UnrealArrayBase<T> : IEnumerable<T>
     /// <summary>
     /// The number of elements in the array.
     /// </summary>
-    public int Count => NativeBuffer->ArrayNum;
+    public int Count
+    {
+        get
+        {
+            // Reads the engine array header directly, so this is the first protected access for a container view.
+            TierBChecks.CheckAccess(nameof(UnrealArrayBase<T>), nameof(Count));
+            return NativeBuffer->ArrayNum;
+        }
+    }
 
     /// <summary>
     /// The native buffer that holds the array data.
     /// </summary>
-    protected IntPtr NativeArrayBuffer => NativeBuffer->Data;
+    protected IntPtr NativeArrayBuffer
+    {
+        get
+        {
+            TierBChecks.CheckAccess(nameof(UnrealArrayBase<T>), nameof(NativeArrayBuffer));
+            return NativeBuffer->Data;
+        }
+    }
 
     /// <summary>
     /// Clears the array.

@@ -6,10 +6,12 @@ namespace UnrealSharp.Interop;
 [NativeCallbacks]
 public static unsafe partial class Bind_UObject
 {
+    [TierAGuarded]
     public static delegate* unmanaged<IntPtr, IntPtr, IntPtr, IntPtr> CreateNewObject;
     public static delegate* unmanaged<IntPtr> GetTransientPackage;
     public static delegate* unmanaged<IntPtr, out FName, void> NativeGetName;
     public static delegate* unmanaged<IntPtr, IntPtr, IntPtr, IntPtr, void> InvokeNativeFunction;
+    [GameThreadEntry]
     public static delegate* unmanaged<IntPtr, IntPtr, IntPtr, IntPtr, void> InvokeNativeStaticFunction;
     public static delegate* unmanaged<IntPtr, IntPtr, IntPtr, IntPtr, void> InvokeNativeFunctionOutParms;
     public static delegate* unmanaged<IntPtr, IntPtr, IntPtr, IntPtr, void> InvokeNativeNetFunction;
@@ -19,6 +21,8 @@ public static unsafe partial class Bind_UObject
     public static delegate* unmanaged<IntPtr, IntPtr, NativeBool> ImplementsInterface;
     public static delegate* unmanaged<IntPtr, int> GetUniqueID;
     public static delegate* unmanaged<IntPtr, IntPtr> GetOuter;
+    [GameThreadEntry]
     public static delegate* unmanaged<IntPtr, IntPtr, string, IntPtr>  StaticLoadClass;
+    [GameThreadEntry]
     public static delegate* unmanaged<IntPtr, IntPtr, string, IntPtr>  StaticLoadObject;
 }

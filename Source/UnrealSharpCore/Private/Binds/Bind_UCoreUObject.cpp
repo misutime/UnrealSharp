@@ -1,6 +1,7 @@
 #include "CSBindsRegistry.h"
 #include "CSManagedAssembly.h"
 #include "CSManager.h"
+#include "CSThreadDiagnostics.h"
 #include "Logging/StructuredLog.h"
 #include "UObject/UObjectGlobals.h"
 #include "HAL/PlatformTLS.h"
@@ -16,11 +17,8 @@ DECLARE_UNREALSHARP_BINDER(Bind_UCoreUObject)
 		// work that has to stay on the game thread. Managed callers validate this first and raise a
 		// managed error; refusing here is the last line of defence (a null result is reported as a
 		// failure by the managed wrapper instead of flowing on into the generated bindings).
-		if (!IsInGameThread() || IsGarbageCollecting())
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UCoreUObject::GetNativeField")))
 		{
-			UE_LOGFMT(LogUnrealSharp, Error, "Refusing to resolve type {0}.{1} of assembly '{2}': called from thread {3} (IsInGameThread={4}, IsGarbageCollecting={5}).",
-				InNamespace, InTypeName, InAssemblyName, FPlatformTLS::GetCurrentThreadId(), IsInGameThread(), IsGarbageCollecting());
-			FDebug::DumpStackTraceToLog(ELogVerbosity::Error);
 			return nullptr;
 		}
 
@@ -56,7 +54,13 @@ DECLARE_UNREALSHARP_BINDER(Bind_UCoreUObject)
 	UDelegateFunction* GetNativeDelegate(const char* PackageName, const char* OuterName, const char* DelegateName)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(GetNativeDelegate);
-		
+
+		// Reflection lookup by package / outer / name.
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UCoreUObject::GetNativeDelegate")))
+		{
+			return nullptr;
+		}
+
 		UPackage* Package = FindPackage(nullptr, UTF8_TO_TCHAR(PackageName));
 		
 		if (!IsValid(Package))
@@ -86,7 +90,14 @@ DECLARE_UNREALSHARP_BINDER(Bind_UCoreUObject)
 	UField* GetGeneratedClassFromSkeleton(UField* InType)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(GetGeneratedClassFromSkeleton);
-		
+
+		// Resolves the generated class behind a skeleton class, which is reflection state that hot reload
+		// rewrites.
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UCoreUObject::GetGeneratedClassFromSkeleton")))
+		{
+			return nullptr;
+		}
+
 		if (!IsValid(InType))
 		{
 			UE_LOGFMT(LogUnrealSharp, Warning, "GetGeneratedClassFromSkeleton called with invalid type");

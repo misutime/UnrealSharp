@@ -248,7 +248,17 @@ public sealed class UnrealSynchronizationContext : SynchronizationContext
         _worldContext = new TWeakObjectPtr<UObject>(worldContext.World);
     }
 
-    public override void Post(SendOrPostCallback d, object? state) => RunOnThread(_worldContext, _thread, () => d(state));
+    public override void Post(SendOrPostCallback d, object? state)
+    {
+        if (!TryRunOnThread(_worldContext, _thread, () => d(state)))
+        {
+            // Was a silent drop: the continuation would never resume and nobody would ever learn why. The
+            // boundary is recorded instead (the dispatcher cannot fail a continuation it never received).
+            EngineCallGuard.ReportBoundaryCatch(
+                $"{nameof(UnrealSynchronizationContext)}.{nameof(Post)}: the callback was not dispatched (invalid world context)");
+        }
+    }
+
     public override void Send(SendOrPostCallback d, object? state)
     {
         if (CurrentThread == _thread)
@@ -258,8 +268,8 @@ public sealed class UnrealSynchronizationContext : SynchronizationContext
         }
 
         using ManualResetEventSlim manualResetEventInstance = new ManualResetEventSlim(false);
-            
-        RunOnThread(_worldContext, _thread, () =>
+
+        bool dispatched = TryRunOnThread(_worldContext, _thread, () =>
         {
             try
             {
@@ -270,17 +280,34 @@ public sealed class UnrealSynchronizationContext : SynchronizationContext
                 manualResetEventInstance.Set();
             }
         });
+
+        // Without this check an undispatched callback would block the game thread on the wait below forever.
+        if (!dispatched)
+        {
+            EngineCallGuard.ReportBoundaryCatch(
+                $"{nameof(UnrealSynchronizationContext)}.{nameof(Send)}: the callback was not dispatched (invalid world context)");
+
+            throw new EngineCallRefusedException(
+                "The callback could not be dispatched to the game thread (the world context is no longer valid); " +
+                "refusing instead of blocking the calling thread forever.");
+        }
+
         manualResetEventInstance.Wait();
     }
 
-    void RunOnThread(TWeakObjectPtr<UObject> worldContextObject, NamedThread thread, Action callback)
+    /// <summary>
+    /// Dispatches a callback to the target thread. Returns false when the callback could not be handed over, so
+    /// the caller can report or fail instead of assuming it will run.
+    /// </summary>
+    bool TryRunOnThread(TWeakObjectPtr<UObject> worldContextObject, NamedThread thread, Action callback)
     {
         if (!worldContextObject.IsValid)
         {
-            return;
+            return false;
         }
         
         GCHandle callbackHandle = GCHandle.Alloc(callback);
         Bind_Async.CallRunOnThread(worldContextObject.Data, (int) thread, GCHandle.ToIntPtr(callbackHandle));
+        return true;
     }
 }

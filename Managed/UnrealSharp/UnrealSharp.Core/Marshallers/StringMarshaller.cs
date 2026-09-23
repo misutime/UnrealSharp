@@ -27,6 +27,9 @@ public static class StringMarshaller
     
     public static string FromNative(IntPtr nativeBuffer, int arrayIndex)
     {
+        // Reads the engine string's header (and its character buffer) out of engine memory.
+        TierBChecks.Check(nameof(StringMarshaller), nameof(FromNative));
+
         unsafe
         {
             UnmanagedArray unrealString = BlittableMarshaller<UnmanagedArray>.FromNative(nativeBuffer, arrayIndex);
@@ -36,6 +39,9 @@ public static class StringMarshaller
     
     public static void DestructInstance(IntPtr nativeBuffer, int arrayIndex)
     {
+        // Destroys the engine string in place, so it is refused rather than half torn down.
+        TierBChecks.Check(nameof(StringMarshaller), nameof(DestructInstance));
+
         unsafe
         {
             UnmanagedArray* unrealString = (UnmanagedArray*) (nativeBuffer + arrayIndex * sizeof(UnmanagedArray));

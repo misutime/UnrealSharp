@@ -96,6 +96,12 @@ public static class ScriptInterfaceMarshaller<T> where T : class
 {
     public static void ToNative(IntPtr nativeBuffer, int arrayIndex, T obj)
     {
+        // Script interface memory is engine memory holding an engine object pointer, so the first access is
+        // checked here. The generic value marshallers are deliberately not checked: they cannot tell engine
+        // memory from an exclusive plain-data buffer, and refusing a legal plain-data copy would be worse than
+        // missing this one (see the plan of record).
+        TierBChecks.Check(nameof(ScriptInterfaceMarshaller<T>), nameof(ToNative));
+
         unsafe
         {
             FScriptInterface* scriptInterface = (FScriptInterface*)(nativeBuffer + arrayIndex * sizeof(FScriptInterface));
@@ -107,6 +113,8 @@ public static class ScriptInterfaceMarshaller<T> where T : class
     
     public static T? FromNative(IntPtr nativeBuffer, int arrayIndex)
     {
+        TierBChecks.Check(nameof(ScriptInterfaceMarshaller<T>), nameof(FromNative));
+
         unsafe
         {
             FScriptInterface* scriptInterface = (FScriptInterface*)(nativeBuffer + arrayIndex * sizeof(FScriptInterface));

@@ -1,4 +1,5 @@
-﻿#include "CSBindsRegistry.h"
+#include "CSBindsRegistry.h"
+#include "CSThreadDiagnostics.h"
 #include "Utilities/CSClassUtilities.h"
 
 DECLARE_UNREALSHARP_BINDER(Bind_UFunction)
@@ -12,6 +13,13 @@ DECLARE_UNREALSHARP_BINDER(Bind_UFunction)
 	UFunction* CreateNativeFunctionCustomStructSpecialization(UFunction* NativeFunction,
 		FProperty** CustomStructParams, UScriptStruct** CustomStructs)
 	{
+		// Refused before anything is constructed: this builds a new function, its properties and relinks the
+		// owning class' child chain, so a refusal must not leave a partially built specialization behind.
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UFunction::CreateNativeFunctionCustomStructSpecialization")))
+		{
+			return nullptr;
+		}
+
 		UClass* Outer = NativeFunction->GetOuterUClass();
 		UFunction* Specialization = NewObject<UFunction>(Outer, UFunction::StaticClass());
 		Specialization->FunctionFlags = NativeFunction->FunctionFlags;

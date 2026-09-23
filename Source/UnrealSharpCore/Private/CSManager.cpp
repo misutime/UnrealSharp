@@ -1,6 +1,7 @@
 #include "CSManager.h"
 #include "CSManagedGCHandle.h"
 #include "CSManagedAssembly.h"
+#include "CSThreadDiagnostics.h"
 #include "UnrealSharpCore.h"
 #include "UObject/Object.h"
 #include "CSNamespace.h"
@@ -171,15 +172,8 @@ UCSManagedAssembly* UCSManager::LoadAssemblyByPath(const FString& AssemblyPath, 
 	// reported back: the managed side validates the same conditions first and turns a refusal into a
 	// catchable error. This check sits above every branch (including the one that loads an assembly
 	// that already exists but is not loaded yet) so no engine state is touched off the game thread.
-	if (!IsInGameThread() || IsGarbageCollecting())
+	if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("UCSManager::LoadAssemblyByPath")))
 	{
-		// Refuse instead of touching engine state here. Managed callers validate the same conditions
-		// before they call in and turn the refusal into a descriptive managed exception; queueing the
-		// work and returning a null assembly is deliberately NOT done, because a null result keeps
-		// flowing through the generated bindings until one of their own checks fires.
-		UE_LOGFMT(LogUnrealSharp, Error, "Refusing to load assembly '{0}': called from thread {1} (IsInGameThread={2}, IsGarbageCollecting={3}).",
-			AssemblyName, FPlatformTLS::GetCurrentThreadId(), IsInGameThread(), IsGarbageCollecting());
-		FDebug::DumpStackTraceToLog(ELogVerbosity::Error);
 		return nullptr;
 	}
 

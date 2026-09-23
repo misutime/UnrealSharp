@@ -13,6 +13,8 @@ public struct FWorldDelegates
 [NativeCallbacks]
 public static unsafe partial class Bind_FWorldDelegates
 {
+    [TierAGuarded]
     public static delegate* unmanaged<IntPtr, out FDelegateHandle, void> BindOnWorldCleanup;
+    [TierAGuarded]
     public static delegate* unmanaged<FDelegateHandle, void> UnbindOnWorldCleanup;
 }

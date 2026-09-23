@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using UnrealSharp.Core;
 using UnrealSharp.Core.Interop;
@@ -27,7 +27,7 @@ public abstract class TStrongObjectPtr : IEquatable<TStrongObjectPtr>, IDisposab
 
     ~TStrongObjectPtr()
     {
-        Dispose();
+        Dispose(false);
     }
     
     public bool IsValid => !_isDisposed && _nativePtr.NativeObject != IntPtr.Zero;
@@ -77,14 +77,37 @@ public abstract class TStrongObjectPtr : IEquatable<TStrongObjectPtr>, IDisposab
 
     public void Dispose()
     {
+        Dispose(true);
+    }
+
+    private void Dispose(bool disposing)
+    {
         if (_isDisposed)
         {
             return;
         }
-        
+
+        // Destroying the pointer releases the object reference the constructor acquired, so a refusal must not
+        // clear the pointer: the explicit call reports the failure, the finalizer records it and keeps the
+        // reference accounted for instead of leaving a pointer with no owner.
+        if (!EngineCallGuard.TryBeginEngineCall($"{nameof(TStrongObjectPtr)}.{nameof(Dispose)}"))
+        {
+            if (disposing)
+            {
+                throw new EngineCallRefusedException(
+                    "TStrongObjectPtr.Dispose must run on the game thread while no garbage collection is running.");
+            }
+
+            return;
+        }
+
         Bind_TStrongObjectPtr.CallDestroyStrongObjectPtr(ref _nativePtr);
         _isDisposed = true;
-        GC.SuppressFinalize(this);
+
+        if (disposing)
+        {
+            GC.SuppressFinalize(this);
+        }
     }
 }
 

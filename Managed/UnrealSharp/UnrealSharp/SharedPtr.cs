@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using UnrealSharp.Binds;
 
 namespace UnrealSharp;
@@ -6,7 +6,9 @@ namespace UnrealSharp;
 [NativeCallbacks]
 public static unsafe partial class Bind_IRefCountedObject
 {
+    [TierAGuarded]
     public static delegate* unmanaged<IntPtr, void> AddRef;
+    [TierAGuarded]
     public static delegate* unmanaged<IntPtr, void> Release;
 }
 

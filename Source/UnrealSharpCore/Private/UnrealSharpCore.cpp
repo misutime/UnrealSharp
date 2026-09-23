@@ -1,7 +1,8 @@
-﻿#include "UnrealSharpCore.h"
+#include "UnrealSharpCore.h"
 #include "CoreMinimal.h"
 #include "CSManager.h"
 #include "CSDotnetUtilties.h"
+#include "CSThreadDiagnostics.h"
 #include "Properties/CSPropertyGeneratorManager.h"
 #include "Modules/ModuleManager.h"
 
@@ -20,6 +21,10 @@ DEFINE_LOG_CATEGORY(LogUnrealSharp);
 
 void FUnrealSharpCoreModule::StartupModule()
 {
+	// Single capture point for the development switch: every check site reads this snapshot, so changing the
+	// console variable at runtime can never make cold and hot classes disagree.
+	UnrealSharp::ThreadDiagnostics::CaptureStartupSnapshot();
+
 #if WITH_EDITOR
 	if (!UnrealSharp::DotNetUtilities::VerifyCSharpEnvironment() || !UnrealSharp::DotNetUtilities::BuildUserSolution())
 	{

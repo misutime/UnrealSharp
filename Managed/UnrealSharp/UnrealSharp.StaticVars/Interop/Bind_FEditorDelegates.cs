@@ -13,8 +13,12 @@ public struct FEditorDelegates
 [NativeCallbacks]
 public static unsafe partial class Bind_FEditorDelegates
 {
+    [TierAGuarded]
     public static delegate* unmanaged<IntPtr, out FDelegateHandle, void> BindStartPIE;
+    [TierAGuarded]
     public static delegate* unmanaged<IntPtr, out FDelegateHandle, void> BindEndPIE;
+    [TierAGuarded]
     public static delegate* unmanaged<FDelegateHandle, void> UnbindStartPIE;
+    [TierAGuarded]
     public static delegate* unmanaged<FDelegateHandle, void> UnbindEndPIE;
 }

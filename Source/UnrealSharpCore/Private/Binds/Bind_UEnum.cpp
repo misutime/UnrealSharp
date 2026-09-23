@@ -1,11 +1,19 @@
-﻿#include "CSBindsRegistry.h"
+#include "CSBindsRegistry.h"
 #include "CSManager.h"
+#include "CSThreadDiagnostics.h"
 #include "Types/CSEnum.h"
 
 DECLARE_UNREALSHARP_BINDER(Bind_UEnum)
 {
 	FGCHandleIntPtr GetManagedEnumType(UEnum* ScriptEnum)
 	{
+		// Type definition resolution touches the manager's registry, so it is refused before the lookup rather
+		// than answering with a handle the caller cannot tell apart from "no managed type".
+		if (UnrealSharp::ThreadDiagnostics::ShouldRefuseEngineCall(TEXT("Bind_UEnum::GetManagedEnumType")))
+		{
+			return FGCHandleIntPtr();
+		}
+
 		if (const UCSEnum* CSEnum = Cast<UCSEnum>(ScriptEnum); CSEnum != nullptr)
 		{
 			return CSEnum->GetManagedTypeDefinition()->GetTypeGCHandle()->GetHandle();

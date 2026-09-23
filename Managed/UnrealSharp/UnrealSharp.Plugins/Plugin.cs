@@ -1,9 +1,8 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using UnrealSharp.Core;
 using UnrealSharp.Engine.Core.Modules;
-
 namespace UnrealSharp.Plugins;
 
 public class Plugin
@@ -80,7 +79,21 @@ public class Plugin
     public WeakReference Unload()
     {
         ShutdownModule();
-        
+
+        // Everything the shutdown left queued for the game thread is settled and dropped here, before the
+        // assembly goes away: a queued item must never invoke a delegate from an unloaded assembly, and it must
+        // not keep the assembly alive either.
+        Assembly? assembly = (Assembly?)Assembly!.Target;
+        if (assembly != null)
+        {
+            int discarded = GameThreadDispatcher.DiscardPendingForAssembly(assembly);
+
+            if (discarded > 0)
+            {
+                LogUnrealSharpPlugins.Log($"Discarded {discarded} queued game thread work item(s) of '{AssemblyName.Name}' before unloading.");
+            }
+        }
+
         AssemblyCache.RemoveAssembly(AssemblyName.Name!);
         GCHandleUtilities.FreeAssembly((Assembly)Assembly!.Target!);
         Assembly = null;
